@@ -28,7 +28,7 @@
     <section class="spectrum-panel">
       <div class="section-heading"><span>Signal view</span><span class="legend"><i></i>Before <b></b>After</span></div>
       <canvas id="spectrum" width="632" height="150" aria-label="Live before and after audio spectrum"></canvas>
-      <div class="spectrum-scale"><span>LOW</span><span>VOICE RANGE</span><span>HIGH</span></div>
+      <div class="spectrum-scale"><span>0 Hz</span><span>12 kHz</span><span>24 kHz</span></div>
     </section>
 
     <button class="power-button" id="power-button" type="button">
@@ -36,6 +36,14 @@
       <span id="power-label">Start filtering</span>
     </button>
 
+    <section class="control-section">
+      <label for="listening-mode">Listening mode</label>
+      <select id="listening-mode">
+        <option value="natural">Natural</option>
+        <option value="dialogue">Clear dialogue</option>
+        <option value="custom">Custom</option>
+      </select>
+    </section>
     <section class="control-section">
       <div class="section-heading"><span>Filter strength</span><output id="intensity-value">68%</output></div>
       <input id="intensity" type="range" min="0" max="100" value="68" aria-label="Filter strength">
@@ -47,6 +55,23 @@
       <input id="voice-boost" type="checkbox" checked>
       <span class="toggle" aria-hidden="true"></span>
     </label>
+
+    <details id="custom-controls">
+      <summary>Custom controls</summary>
+      <p class="control-help">Lower dry-signal retention to reduce hiss. If speech is being swallowed, raise dry retention or reduce suppression. Boosting output also boosts remaining noise.</p>
+      <label class="control-section" for="speech-gain">Speech clarity <output id="speech-gain-value"></output></label>
+      <input id="speech-gain" type="range" min="0" max="9" step="0.5" value="2.5">
+      <label class="control-section" for="output-percent">Output gain (100% = unity) <output id="output-percent-value"></output></label>
+      <input id="output-percent" type="range" min="0" max="800" step="10" value="100">
+      <label class="control-section" for="dry-percent">Dry signal (AI mode) <output id="dry-percent-value"></output></label>
+      <input id="dry-percent" type="range" min="0" max="50" step="1" value="15">
+      <label class="control-section" for="hiss-cutoff">High-frequency cutoff <output id="hiss-cutoff-value"></output></label>
+      <input id="hiss-cutoff" type="range" min="4000" max="20000" step="500" value="20000">
+      <p class="control-help">Lowering this cap reduces hiss but can also soften consonant detail.</p>
+      <label class="control-section" for="noise-window">Noise floor window (fallback mode) <output id="noise-window-value"></output></label>
+      <input id="noise-window" type="range" min="3" max="15" step="1" value="3">
+      <p class="control-help">Always updates live without pausing playback. AI mode does not wait for this window. Output limiting is always enabled.</p>
+    </details>
 
     <p class="notice" id="notice">Works with audio from the current tab. Start playback before enabling.</p>
   </main>
