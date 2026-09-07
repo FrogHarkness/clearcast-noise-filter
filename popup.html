@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClearCast</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div>
+        <p class="eyebrow">LIVE AUDIO TOOL</p>
+        <h1>ClearCast</h1>
+      </div>
+      <div class="live-dot" id="live-dot" title="Filter status"></div>
+    </header>
+
+    <section class="hero-panel">
+      <div class="waveform" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="hero-copy">
+        <p class="status-label" id="status-label">READY TO LISTEN</p>
+        <p class="status-detail" id="status-detail">Clean up the active tab's audio in real time.</p>
+      </div>
+    </section>
+
+    <section class="spectrum-panel">
+      <div class="section-heading"><span>Signal view</span><span class="legend"><i></i>Before <b></b>After</span></div>
+      <canvas id="spectrum" width="632" height="150" aria-label="Live before and after audio spectrum"></canvas>
+      <div class="spectrum-scale"><span>LOW</span><span>VOICE RANGE</span><span>HIGH</span></div>
+    </section>
+
+    <button class="power-button" id="power-button" type="button">
+      <span class="power-icon" aria-hidden="true">◉</span>
+      <span id="power-label">Start filtering</span>
+    </button>
+
+    <section class="control-section">
+      <div class="section-heading"><span>Filter strength</span><output id="intensity-value">68%</output></div>
+      <input id="intensity" type="range" min="0" max="100" value="68" aria-label="Filter strength">
+      <div class="range-labels"><span>Natural</span><span>Focused</span></div>
+    </section>
+
+    <label class="toggle-row" for="voice-boost">
+      <span><strong>Voice focus</strong><small>Prioritize speech frequencies</small></span>
+      <input id="voice-boost" type="checkbox" checked>
+      <span class="toggle" aria-hidden="true"></span>
+    </label>
+
+    <p class="notice" id="notice">Works with audio from the current tab. Start playback before enabling.</p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
