@@ -7,9 +7,11 @@ class SpectralNoiseReducer extends AudioWorkletProcessor {
     this.intensity = 0.68;
     this.voiceBoost = true;
     this.calibrated = false;
+    this.noiseWindow = 3;
     this.port.onmessage = ({ data }) => {
       if (data.type === 'SETTINGS') {
-        this.intensity = Math.max(0, Math.min(1, Number(data.intensity) / 100));
+        if (Number.isFinite(data.intensity)) this.intensity = Math.max(0, Math.min(1, data.intensity / 100));
+        if (Number.isFinite(data.noiseWindow)) this.noiseWindow = Math.max(3, Math.min(15, data.noiseWindow));
         this.voiceBoost = Boolean(data.voiceBoost);
       }
     };
@@ -110,9 +112,9 @@ class SpectralNoiseReducer extends AudioWorkletProcessor {
       }
 
       const speechPresent = magnitude > state.noise[bin] * 1.8;
-      state.noise[bin] = speechPresent
-        ? state.noise[bin] * 0.9995 + magnitude * 0.0005
-        : state.noise[bin] * 0.985 + magnitude * 0.015;
+      // Time constant in seconds, updated live without clearing the profile.
+      const alpha = 1 - Math.exp(-this.hop / (sampleRate * this.noiseWindow * (speechPresent ? 30 : 1)));
+      state.noise[bin] += alpha * (magnitude - state.noise[bin]);
     }
     state.noiseReady = true;
     this.fft(real, imag, true);

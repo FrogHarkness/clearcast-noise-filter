@@ -1,10 +1,15 @@
+import { defaults, normalizeSettings, effectiveSettings } from './settings.js';
 let audioContext;
 let mediaStream;
 let source;
 let outputGain;
+let outputLimiter;
+let commonEq;
+let commonLowPass;
 let reducer;
 let beforeAnalyser;
 let afterAnalyser;
+let outputAnalyser;
 let metricsTimer;
 let neuralActivationTimer;
 let dryDelay;
@@ -18,11 +23,6 @@ let currentSettings;
 let processorMode = 'none';
 let neuralReady = false;
 let switchingFallback = false;
-
-const defaults = {
-  intensity: 68,
-  voiceBoost: true
-};
 
 function disconnect(node) {
   if (!node) return;
@@ -65,35 +65,37 @@ function disconnectProcessingGraph() {
 }
 
 function applySettings(settings = defaults) {
-  currentSettings = {
-    intensity: Math.max(0, Math.min(100, Number(settings.intensity ?? defaults.intensity))),
-    voiceBoost: settings.voiceBoost ?? defaults.voiceBoost
-  };
+  currentSettings = normalizeSettings(settings, currentSettings);
+  settings = effectiveSettings(currentSettings);
 
   if (!audioContext) return;
-  const strength = currentSettings.intensity / 100;
+  const strength = settings.intensity / 100;
   const now = audioContext.currentTime;
+  outputGain.gain.setTargetAtTime(settings.outputPercent / 100, now, 0.05);
+  commonEq.gain.setTargetAtTime(settings.voiceBoost ? settings.speechGain : 0, now, 0.02);
+  commonLowPass.frequency.setTargetAtTime(Math.min(settings.hissCutoff, audioContext.sampleRate * 0.45), now, 0.02);
 
   if (processorMode === 'neural' && dryGain && wetGain) {
     // The dry signal is delayed to match GTCRN's five 128-sample buffering
-    // blocks, preventing comb filtering while the slider crossfades.
+    // blocks, aligning the dry and wet paths while the slider crossfades.
     const effectiveStrength = neuralReady ? strength : 0;
-    dryGain.gain.setTargetAtTime(Math.cos(effectiveStrength * Math.PI / 2), now, 0.015);
-    wetGain.gain.setTargetAtTime(Math.sin(effectiveStrength * Math.PI / 2), now, 0.015);
-    voiceEq.gain.setTargetAtTime(currentSettings.voiceBoost ? 2.5 : 0, now, 0.02);
+    dryGain.gain.setTargetAtTime(1 - effectiveStrength * (1 - settings.dryPercent / 100), now, 0.015);
+    wetGain.gain.setTargetAtTime(effectiveStrength * (1 - settings.dryPercent / 100), now, 0.015);
+    voiceEq.gain.setTargetAtTime(0, now, 0.02);
   }
 
   if (processorMode === 'spectral' && reducer) {
     reducer.port.postMessage({
       type: 'SETTINGS',
-      intensity: currentSettings.intensity,
-      voiceBoost: currentSettings.voiceBoost
+      intensity: settings.intensity,
+      voiceBoost: settings.voiceBoost,
+      noiseWindow: settings.noiseWindow
     });
   }
 
   if (processorMode === 'dsp' && fallbackHighPass && fallbackLowPass && fallbackCompressor) {
     fallbackHighPass.frequency.setTargetAtTime(55 + strength * 145, now, 0.02);
-    fallbackLowPass.frequency.setTargetAtTime(currentSettings.voiceBoost ? 8200 : 16000, now, 0.02);
+    fallbackLowPass.frequency.setTargetAtTime(Math.min(settings.hissCutoff, audioContext.sampleRate * 0.45), now, 0.02);
     fallbackCompressor.threshold.setTargetAtTime(-18 - strength * 18, now, 0.02);
     fallbackCompressor.ratio.setTargetAtTime(2 + strength * 4, now, 0.02);
   }
@@ -130,11 +132,12 @@ function connectNeuralGraph(wasmBinary) {
   wetGain = nextWetGain;
   voiceEq = nextVoiceEq;
   processorMode = 'neural';
+  chrome.runtime.sendMessage({ type: 'PROCESSOR_MODE', processorMode }).catch(() => {});
 
   source.connect(beforeAnalyser);
   beforeAnalyser.connect(dryDelay).connect(dryGain).connect(afterAnalyser);
   beforeAnalyser.connect(reducer).connect(wetGain).connect(afterAnalyser);
-  afterAnalyser.connect(voiceEq).connect(outputGain);
+  afterAnalyser.connect(voiceEq).connect(commonEq);
 
   reducer.onprocessorerror = () => {
     switchToSpectralFallback().catch(() => switchToDspFallback());
@@ -168,7 +171,8 @@ async function switchToSpectralFallback() {
     disconnectProcessingGraph();
     reducer = spectralReducer;
     processorMode = 'spectral';
-    source.connect(beforeAnalyser).connect(reducer).connect(afterAnalyser).connect(outputGain);
+    chrome.runtime.sendMessage({ type: 'PROCESSOR_MODE', processorMode }).catch(() => {});
+    source.connect(beforeAnalyser).connect(reducer).connect(afterAnalyser).connect(commonEq);
     reducer.onprocessorerror = () => switchToDspFallback();
     reducer.port.onmessage = (event) => {
       if (event.data.type === 'CALIBRATED') {
@@ -194,17 +198,18 @@ function switchToDspFallback() {
   fallbackLowPass = lowPass;
   fallbackCompressor = compressor;
   processorMode = 'dsp';
-  source.connect(beforeAnalyser).connect(highPass).connect(lowPass).connect(compressor).connect(afterAnalyser).connect(outputGain);
+  chrome.runtime.sendMessage({ type: 'PROCESSOR_MODE', processorMode }).catch(() => {});
+  source.connect(beforeAnalyser).connect(highPass).connect(lowPass).connect(compressor).connect(afterAnalyser).connect(commonEq);
   applySettings(currentSettings);
   chrome.runtime.sendMessage({ type: 'FILTER_STATUS', status: 'fallback' }).catch(() => {});
 }
 
 function sendMetrics() {
-  if (!beforeAnalyser || !afterAnalyser) return;
+  if (!beforeAnalyser || !outputAnalyser) return;
   const before = new Uint8Array(beforeAnalyser.frequencyBinCount);
-  const after = new Uint8Array(afterAnalyser.frequencyBinCount);
+  const after = new Uint8Array(outputAnalyser.frequencyBinCount);
   beforeAnalyser.getByteFrequencyData(before);
-  afterAnalyser.getByteFrequencyData(after);
+  outputAnalyser.getByteFrequencyData(after);
   chrome.runtime.sendMessage({
     type: 'AUDIO_METRICS',
     before: Array.from(before.filter((_value, index) => index % 8 === 0)),
@@ -245,13 +250,25 @@ async function startAudio(streamId, tabId, settings) {
       chrome.runtime.sendMessage({ type: 'CAPTURE_ENDED', tabId }).catch(() => {});
     }, { once: true });
 
-    currentSettings = { ...defaults, ...settings };
+    currentSettings = normalizeSettings(settings);
     // GTCRN has a native 48 kHz streaming path. Chrome resamples the device
     // output when necessary while keeping model inference deterministic.
     audioContext = new AudioContext({ latencyHint: 'interactive', sampleRate: 48000 });
     source = audioContext.createMediaStreamSource(mediaStream);
     outputGain = audioContext.createGain();
-    outputGain.gain.value = 1;
+    outputGain.gain.value = 0;
+    commonEq = audioContext.createBiquadFilter();
+    commonEq.type = 'peaking';
+    commonEq.frequency.value = 2400;
+    commonEq.Q.value = 0.8;
+    commonLowPass = audioContext.createBiquadFilter();
+    commonLowPass.type = 'lowpass';
+    await audioContext.audioWorklet.addModule(chrome.runtime.getURL('output-limiter-worklet.js'));
+    outputLimiter = new AudioWorkletNode(audioContext, 'clearcast-output-limiter');
+    outputAnalyser = audioContext.createAnalyser();
+    outputAnalyser.fftSize = 1024;
+    commonEq.connect(commonLowPass).connect(outputGain).connect(outputLimiter).connect(outputAnalyser).connect(audioContext.destination);
+    applySettings(currentSettings);
     beforeAnalyser = audioContext.createAnalyser();
     afterAnalyser = audioContext.createAnalyser();
     beforeAnalyser.fftSize = 1024;
@@ -259,7 +276,7 @@ async function startAudio(streamId, tabId, settings) {
 
     // Chrome suppresses normal tab output during capture. Restore playback
     // before loading any model so a slow or failed initialization cannot mute it.
-    source.connect(outputGain).connect(audioContext.destination);
+    source.connect(commonEq);
     if (audioContext.state === 'suspended') await audioContext.resume();
 
     try {
@@ -284,14 +301,18 @@ async function stopAudio() {
   if (metricsTimer) clearInterval(metricsTimer);
   metricsTimer = null;
   disconnectProcessingGraph();
-  [source, beforeAnalyser, afterAnalyser, outputGain].forEach(disconnect);
+  [source, beforeAnalyser, afterAnalyser, outputAnalyser, commonEq, commonLowPass, outputGain, outputLimiter].forEach(disconnect);
 
   audioContext = null;
   mediaStream = null;
   source = null;
   outputGain = null;
+  outputLimiter = null;
+  commonEq = null;
+  commonLowPass = null;
   beforeAnalyser = null;
   afterAnalyser = null;
+  outputAnalyser = null;
   switchingFallback = false;
 
   if (oldStream) oldStream.getTracks().forEach((track) => track.stop());
@@ -319,6 +340,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
-  if (message.type === 'UPDATE_SETTINGS') applySettings(message.settings);
+  if (message.type === 'GET_PROCESSOR_STATE') { sendResponse({ processorMode }); return false; }
+  if (message.type === 'UPDATE_SETTINGS') {
+    applySettings(message.settings);
+    sendResponse({ ok: true, processorMode });
+  }
   return undefined;
 });

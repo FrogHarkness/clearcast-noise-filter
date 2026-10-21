@@ -1,3 +1,4 @@
+import { defaults, normalizeSettings, effectiveSettings, capabilities } from './settings.js';
 const powerButton = document.querySelector('#power-button');
 const powerLabel = document.querySelector('#power-label');
 const statusLabel = document.querySelector('#status-label');
@@ -58,6 +59,7 @@ function drawSpectrum() {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'PROCESSOR_MODE') { processorMode = message.processorMode; renderSettings(); }
   if (message.type === 'AUDIO_METRICS') {
     beforeSpectrum = message.before || [];
     afterSpectrum = message.after || [];
@@ -81,6 +83,7 @@ chrome.runtime.onMessage.addListener((message) => {
 
 function setActive(nextActive) {
   active = nextActive;
+  if (!active) { processorMode = 'none'; renderSettings(); }
   document.body.classList.toggle('is-active', active);
   powerButton.classList.toggle('is-active', active);
   liveDot.classList.toggle('is-active', active);
@@ -94,14 +97,39 @@ function setActive(nextActive) {
     : 'Works with audio from the current tab. Start playback before enabling.';
 }
 
-function saveSettings() {
-  const settings = {
-    intensity: Number(intensity.value),
-    voiceBoost: voiceBoost.checked
-  };
-  chrome.storage.local.set(settings);
-  chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings });
+let settings = normalizeSettings();
+let processorMode = 'none';
+let saveQueue = Promise.resolve();
+const controls = { intensity, voiceBoost, listeningMode: document.querySelector('#listening-mode'), ...Object.fromEntries(['speechGain','outputPercent','dryPercent','hissCutoff','noiseWindow','allowBoost'].map(key => [key, document.querySelector('#' + key.replace(/[A-Z]/g, c => '-' + c.toLowerCase()))])) };
+function renderSettings() {
+  const effective = effectiveSettings(settings);
+  const supported = capabilities(processorMode);
+  controls.outputPercent.max = settings.allowBoost ? 800 : 100;
+  const ids = { intensity: 'intensity', speechGain: 'speech-gain', outputPercent: 'output-percent', dryPercent: 'dry-percent', hissCutoff: 'hiss-cutoff', noiseWindow: 'noise-window' };
+  const units = { intensity: '%', speechGain: ' dB', outputPercent: '%', dryPercent: '%', hissCutoff: ' Hz', noiseWindow: ' s' };
+  for (const [key, element] of Object.entries(controls)) {
+    if (element.type === 'checkbox') element.checked = effective[key];
+    else element.value = effective[key];
+    const unsupported = (key in supported && !supported[key]) || (key === 'speechGain' && !effective.voiceBoost);
+    element.disabled = unsupported;
+    element.title = unsupported ? 'Unavailable in the current processing path; saved for supported paths.' : '';
+    if (ids[key]) document.querySelector('#' + ids[key] + '-value').textContent = effective[key] + units[key] + (unsupported ? ' (unavailable)' : '');
+  }
 }
+function saveSettings(patch) {
+  settings = normalizeSettings(patch, settings);
+  renderSettings();
+  saveQueue = saveQueue.catch(() => {}).then(async () => {
+    const response = await chrome.runtime.sendMessage({ type: 'UPDATE_SETTINGS', settings: patch });
+    if (!response?.ok) throw new Error(response?.error || 'Could not save settings.');
+  }).catch(error => { notice.textContent = error.message; });
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local') return;
+  const patch = Object.fromEntries(Object.entries(changes).filter(([key]) => key in defaults).map(([key, change]) => [key, change.newValue]));
+  settings = normalizeSettings(patch, settings);
+  renderSettings();
+});
 
 async function toggleFiltering() {
   powerButton.disabled = true;
@@ -109,6 +137,7 @@ async function toggleFiltering() {
   const messageType = active ? 'STOP_FILTERING' : 'START_FILTERING';
 
   try {
+    await saveQueue;
     const response = await chrome.runtime.sendMessage({ type: messageType });
     if (!response?.ok) {
       throw new Error(response?.error || 'Chrome could not capture this tab.');
@@ -125,20 +154,23 @@ async function toggleFiltering() {
 }
 
 async function restoreState() {
-  const settings = await chrome.storage.local.get({ intensity: 68, voiceBoost: true });
-  intensity.value = settings.intensity;
-  intensityValue.textContent = `${settings.intensity}%`;
-  voiceBoost.checked = settings.voiceBoost;
+  settings = normalizeSettings(await chrome.storage.local.get(defaults));
+  renderSettings();
 
   const state = await chrome.runtime.sendMessage({ type: 'GET_STATE' });
+  processorMode = state?.processorMode || 'none';
+  renderSettings();
   setActive(Boolean(state?.active));
 }
 
 powerButton.addEventListener('click', toggleFiltering);
-intensity.addEventListener('input', () => {
-  intensityValue.textContent = `${intensity.value}%`;
-  saveSettings();
-});
-voiceBoost.addEventListener('change', saveSettings);
+for (const [key, element] of Object.entries(controls)) {
+  element.addEventListener(element.type === 'range' ? 'input' : 'change', () => {
+    const value = element.type === 'checkbox' ? element.checked : key === 'listeningMode' ? element.value : Number(element.value);
+    const patch = { [key]: value };
+    if (!['listeningMode','outputPercent','allowBoost'].includes(key)) patch.listeningMode = 'custom';
+    saveSettings(patch);
+  });
+}
 restoreState().catch(() => setActive(false));
 drawSpectrum();

@@ -62,19 +62,20 @@
       <label class="control-section" for="speech-gain">Speech clarity <output id="speech-gain-value"></output></label>
       <input id="speech-gain" type="range" min="0" max="9" step="0.5" value="2.5">
       <label class="control-section" for="output-percent">Output gain (100% = unity) <output id="output-percent-value"></output></label>
+      <label><input id="allow-boost" type="checkbox"> Allow output above 100% (up to +18 dB). Lower device volume first. Peak limiting does not ensure safe listening levels.</label>
       <input id="output-percent" type="range" min="0" max="800" step="10" value="100">
       <label class="control-section" for="dry-percent">Dry signal (AI mode) <output id="dry-percent-value"></output></label>
       <input id="dry-percent" type="range" min="0" max="50" step="1" value="15">
       <label class="control-section" for="hiss-cutoff">High-frequency cutoff <output id="hiss-cutoff-value"></output></label>
       <input id="hiss-cutoff" type="range" min="4000" max="20000" step="500" value="20000">
       <p class="control-help">Lowering this cap reduces hiss but can also soften consonant detail.</p>
-      <label class="control-section" for="noise-window">Noise floor window (fallback mode) <output id="noise-window-value"></output></label>
+      <label class="control-section" for="noise-window">Noise floor window (Spectral only) <output id="noise-window-value"></output></label>
       <input id="noise-window" type="range" min="3" max="15" step="1" value="3">
-      <p class="control-help">Always updates live without pausing playback. AI mode does not wait for this window. Output limiting is always enabled.</p>
+      <p class="control-help">Always updates live without pausing playback. AI mode does not wait for this window. Output peak limiting is always enabled.</p>
     </details>
 
     <p class="notice" id="notice">Works with audio from the current tab. Start playback before enabling.</p>
   </main>
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>
