@@ -1,3 +1,4 @@
+import { defaults, normalizeSettings } from './settings.js';
 const OFFSCREEN_URL = 'offscreen.html';
 const OFFSCREEN_DOCUMENT_URL = chrome.runtime.getURL(OFFSCREEN_URL);
 
@@ -95,7 +96,7 @@ async function startFilteringInternal() {
     // Chrome stream IDs expire quickly. The consumer must be ready before we ask
     // Chrome for the ID, particularly on the first run of the extension.
     await ensureOffscreenDocument();
-    const settings = await chrome.storage.local.get({ intensity: 68, voiceBoost: true });
+    const settings = await chrome.storage.local.get(defaults).then(normalizeSettings);
     const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     const response = await sendToOffscreen({
       type: 'START_AUDIO',
@@ -129,7 +130,10 @@ async function getState() {
   const captureIsAlive = capturedTabs.some(({ tabId, status }) => (
     tabId === state.tabId && (status === 'active' || status === 'pending')
   ));
-  if (captureIsAlive) return state;
+  if (captureIsAlive) {
+    const processor = await sendToOffscreen({ type: 'GET_PROCESSOR_STATE' });
+    return { ...state, processorMode: processor?.processorMode };
+  }
 
   await closeAndResetState();
   return { active: false, tabId: null };
@@ -160,7 +164,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'UPDATE_SETTINGS') {
-    sendToOffscreen(message).catch(() => {});
+    serializeLifecycle(async () => {
+      const previous = await chrome.storage.local.get(defaults);
+      const settings = normalizeSettings(message.settings, normalizeSettings(previous));
+      await chrome.storage.local.set(settings);
+      if ((await getOffscreenContexts()).length) {
+        const response = await sendToOffscreen({ type: 'UPDATE_SETTINGS', settings });
+        if (!response?.ok) throw new Error('Audio settings were saved but could not be applied.');
+      }
+      return settings;
+    }).then(settings => sendResponse({ ok: true, settings }))
+      .catch(error => sendResponse({ ok: false, error: error.message }));
+    return true;
   }
 
   if (message.type === 'CAPTURE_ENDED') {
